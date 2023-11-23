@@ -1,64 +1,104 @@
 #include <Arduino.h>
 
-// put function declarations here:
-int myFunction(int, int);
+void handle_button_input(void);
+void set_status_indicators(void);
+void check_status(void);
 
+#define GREEN_LED_PIN 2
+#define RED_LED_PIN 3
+#define SPEAKER_PIN 4
+#define PHOTORESISTOR_PIN 12
+#define PHOTORESISTOR_ANALOG_PIN A0 
+#define BUTTON_PIN 5
+#define SOLENOID_PIN 8 
+#define BEAM_BREAK_THRESHOLD 100;
+#define BAUD_RATE 9600
+#define SMALL_DELAY 100
+#define ALARM_FREQUENCY 400
+#define ALARM_DURATION 300
+
+bool system_on = false;
+bool security_violation = false;
+int button_voltage;
+int photoresistor_voltage;
+
+
+/**
+ * Performs setup operations like initializing pines.
+*/
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+  pinMode(GREEN_LED_PIN, OUTPUT);
+  pinMode(RED_LED_PIN, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP); 
+  pinMode(SPEAKER_PIN, OUTPUT); 
+  pinMode(SOLENOID_PIN, OUTPUT);
+
+  // TODO: Initialize photoresistors and lasers, power lasers on
+
+  Serial.begin(BAUD_RATE);
 }
 
+/**
+ * Main control of program. 
+ * 
+ * Handles inputs and monitors security systems
+*/
 void loop() {
-  // put your main code here, to run repeatedly:
+  if (system_on) {
+    check_status();
+  }
+
+  handle_button_input();
+  set_status_indicators();
+  delay(SMALL_DELAY);
 }
 
-// put function definitions here:
-#define Green_LED 2
-#define Red_LED 3
-#define Speaker 4
-#define phresPin 12
-#define photores A0 
-#define buttonPin 5
-#define solenoidPin 8 
-int buttonVoltage;
-int prVoltage;
-int thresholddark = 100;
-int thresholdmedium = 300;
-int thresholdbright=750;
-
-
-void setup() {
-  pinMode(correctLEDpin,OUTPUT);
-  pinMode(incorrectLEDpin,OUTPUT);
-  pinMode(buttonPIN, INPUT_PULLUP); 
-  pinMode(speaker, OUTPUT); 
-  Serial.begin(9600);
-  pinMode(solenoidPin, OUTPUT)
-
+/**
+ * Handles button inputs. Toggles system state + resets violation status
+*/
+void handle_button_input(void) {
+  button_voltage = digitalRead(BUTTON_PIN);
+  if (button_voltage == LOW) {
+    system_on = !system_on;
+    security_violation = false; // regardless of what power status is triggered we can reset security violations
+  }
 }
 
-void loop() {
- buttonVoltage= digitalRead(buttonPin);
-  if(buttonVoltage == LOW) {
-      digitalWrite(solenoidPin, LOW);//make sure door isnt deadbolted 
-      digitalWrite(greenLED, HIGH);//turn on LED to indicate the system is on 
-    //laser movement and such  
-    //if laser is broken
-      digitalWrite(solenoidPin, HIGH);      //Switch Solenoid ON
-      digitalWrite(greenLED, LOW);
-      digitalWrite (redLED, HIGH);
-      tone (speaker, 400, 300);
-      digitalWrite (redLED, LOW);
-      tone (speaker, 400, 300);
-    
-      }
-    else{
-      delay(100);
-    }
-    }
-   
-     
-      }
-   
+/**
+ * Determines which status indicators should be displayed based on system status.
+*/
+void set_status_indicators(void) {
+  if (system_on && !security_violation) {
+    digitalWrite(SOLENOID_PIN, LOW);   // ensures deadbolt is unlocked
+    digitalWrite(GREEN_LED_PIN, HIGH); // gives indication system is all good
+    digitalWrite(RED_LED_PIN, LOW);    // ensures alarm indicator is off
+  } 
 
+  else if (system_on && security_violation) {
+    digitalWrite(SOLENOID_PIN, HIGH);  // locks door on security violation
+    digitalWrite(GREEN_LED_PIN, LOW);  // ensures all good is off
+    digitalWrite(RED_LED_PIN, HIGH);   // gives indication system detected alarm
+
+    // plays alarm on security violation
+    tone(SPEAKER_PIN, ALARM_FREQUENCY, ALARM_DURATION);
+    delay(SMALL_DELAY);
+    tone(SPEAKER_PIN, ALARM_FREQUENCY, ALARM_DURATION);
+  } 
+
+  else {
+    digitalWrite(SOLENOID_PIN, LOW);   // deadbolt unlocked on inactive system
+    digitalWrite(GREEN_LED_PIN, LOW);  // LED off on inactive system
+    digitalWrite(RED_LED_PIN, LOW);    // LED off on inactive system
+  }
 }
+
+/**
+ * Checks and sets the status of the system, namely whether or not any of the laser beams have been broken.
+*/
+void check_status() {
+  // TODO: iterate through laser beams and check if any photo resistor value is less than the threshold, if so trigger a security violation
+  if (false) {
+    security_violation = true;
+  }
+}
+
