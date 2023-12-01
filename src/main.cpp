@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Servo.h>
 
 void handle_button_input(void);
 void set_status_indicators(void);
@@ -6,36 +7,39 @@ void check_status(void);
 void indicators_on_no_violation(void);
 void indicators_on_violation(void);
 void indicators_off(void);
-void rotate_motor(void);
+float get_distance(void);
 
 #define GREEN_LED_PIN 2
 #define RED_LED_PIN 3
 #define SPEAKER_PIN 4
 #define PHOTORESISTOR_PIN_ONE 6
-#define PHOTORESISTOR_APIN_ONE A0 
-#define PHOTORESISTOR_PIN_TWO 7
-#define PHOTORESISTOR_APIN_TWO A1
-#define PHOTORESISTOR_PIN_THREE 8
-#define PHOTORESISTOR_APIN_THREE A2
 #define BUTTON_PIN 5
-#define SOLENOID_PIN 8 
+#define SERVO_PIN 8 
 #define BEAM_BREAK_THRESHOLD 100
 #define BAUD_RATE 9600
 #define SMALL_DELAY 10
+#define LARGE_DELAY 300
 #define ALARM_FREQUENCY 400
 #define ALARM_DURATION 300
 #define LASER_PIN_ONE 9
-#define LASER_PIN_TWO 10
-#define LASER_PIN_THREE 11
-
+#define UNLOCKED_ROTATION 0
+#define LOCKED_ROTATION 90
+#define US_TRIG_PIN 12
+#define US_ECHO_PIN 11
+#define ROUND_TRIP_FACTOR 2
+#define PULSE_LENGTH_TO_CM_CONV_FACTOR 29.1
+#define SIGNAL_INTEGRITY_DELAY_US 5
+#define US_TRIGGER_TIME 10
+#define US_DISTANCE_THRESHOLD 3
 
 bool system_on = false;
 bool security_violation = false;
 int button_voltage;
 int photoresistor_voltage;
-int laser_pins[] = {LASER_PIN_ONE, LASER_PIN_TWO, LASER_PIN_THREE};
-int photoresistor_pins[] = {PHOTORESISTOR_PIN_ONE, PHOTORESISTOR_PIN_TWO, PHOTORESISTOR_PIN_THREE};
-int photoresistor_apins[] = {PHOTORESISTOR_APIN_ONE, PHOTORESISTOR_APIN_TWO, PHOTORESISTOR_APIN_THREE};
+int laser_pins[] = {LASER_PIN_ONE};
+int photoresistor_pins[] = {PHOTORESISTOR_PIN_ONE};
+
+Servo servoLock;
 
 
 
@@ -47,11 +51,19 @@ void setup() {
   pinMode(RED_LED_PIN, OUTPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP); 
   pinMode(SPEAKER_PIN, OUTPUT); 
-  pinMode(SOLENOID_PIN, OUTPUT);
+  pinMode(SERVO_PIN, OUTPUT);
+  pinMode(US_TRIG_PIN, OUTPUT);
+  pinMode(US_ECHO_PIN, INPUT);
 
   for (int pin : laser_pins) {
     pinMode(pin, OUTPUT);
   }
+
+  for (int pin : photoresistor_pins) {
+    pinMode(pin, INPUT);
+  }
+
+  servoLock.attach(SERVO_PIN);
 
   Serial.begin(BAUD_RATE);
 }
@@ -64,7 +76,6 @@ void setup() {
 void loop() {
   if (system_on) {
     check_status();
-    rotate_motor();
   }
 
   handle_button_input();
@@ -80,6 +91,8 @@ void handle_button_input(void) {
   if (button_voltage == LOW) {
     system_on = !system_on;
     security_violation = false; // regardless of what power status is triggered we can reset security violations
+    servoLock.write(system_on ? LOCKED_ROTATION : UNLOCKED_ROTATION);
+    delay(LARGE_DELAY);
   }
 }
 
@@ -102,7 +115,7 @@ void set_status_indicators(void) {
  * This means
  * - Lasers on
  * - Photoresistors on
- * - Solenoid unlocked
+ * - Servo locked
  * - Green LED on
  * - Red LED off
  * - Motor on
@@ -113,38 +126,30 @@ void indicators_on_no_violation(void) {
     digitalWrite(pin, HIGH);
   }
 
-  // Turn photoresistors on
-  for (int pin : photoresistor_pins) {
-    digitalWrite(pin, HIGH);
-  }
-
-  digitalWrite(SOLENOID_PIN, LOW);   // ensures deadbolt is unlocked
   digitalWrite(GREEN_LED_PIN, HIGH); // gives indication system is all good
   digitalWrite(RED_LED_PIN, LOW);    // ensures alarm indicator is off
-
-  // TODO: Turn motor on
 }
 
 /**
  * Sets the indicators for system on, violations.
  * 
  * This means
- * - Solenoid locked
+ * - Servo locked
  * - Green LED off
  * - Red LED on
  * - Motor off
 */
 void indicators_on_violation(void) {
-  digitalWrite(SOLENOID_PIN, HIGH);  // locks door on security violation
+  for (int pin : laser_pins) {
+    digitalWrite(pin, LOW);
+  }
+
   digitalWrite(GREEN_LED_PIN, LOW);  // ensures all good is off
   digitalWrite(RED_LED_PIN, HIGH);   // gives indication system detected alarm
 
+
   // plays alarm on security violation
   tone(SPEAKER_PIN, ALARM_FREQUENCY, ALARM_DURATION);
-  delay(SMALL_DELAY);
-  tone(SPEAKER_PIN, ALARM_FREQUENCY, ALARM_DURATION);
-
-  // TODO: turn motor off
 }
 
 /**
@@ -153,7 +158,7 @@ void indicators_on_violation(void) {
  * This means
  * - Lasers off
  * - Photoresistors off
- * - Solenoid unlocked
+ * - Servo unlocked
  * - Green LED off
  * - Red LED off
  * - Motor off
@@ -169,30 +174,40 @@ void indicators_off(void) {
     digitalWrite(pin, LOW);
   }
 
-  digitalWrite(SOLENOID_PIN, LOW);   // deadbolt unlocked on inactive system
-  digitalWrite(GREEN_LED_PIN, LOW);  // LED off on inactive system
-  digitalWrite(RED_LED_PIN, LOW);    // LED off on inactive system
-
-  // TODO: Turn motor off
+  digitalWrite(GREEN_LED_PIN, LOW);   // LED off on inactive system
+  digitalWrite(RED_LED_PIN, LOW);     // LED off on inactive system
 }
 
 /**
  * Checks and sets the status of the system, namely whether or not any of the laser beams have been broken.
 */
 void check_status(void) {
-  for (int pr : photoresistor_apins) {
-    // TODO: Consider adding debouncing here to stablize the value. Weigh with timing concerns
-    if (analogRead(pr) < BEAM_BREAK_THRESHOLD) {
+  get_distance();
+
+  // if (cm < US_DISTANCE_THRESHOLD) {
+  //   security_violation = true;
+  // }
+  for (int pr : photoresistor_pins) {
+    if (digitalRead(pr) == HIGH) {
       security_violation = true;
     }
   }
 }
 
 /**
- * Rotates the motor to a random interval
+ * Gets the distance of the object in front of the ultrasonic sensor
 */
-void rotate_motor(void) {
-  // TODO: rotate the motor
-  int x = 1;
+float get_distance() {
+  // trigger a reading
+  digitalWrite(US_TRIG_PIN, LOW);
+  delayMicroseconds(SIGNAL_INTEGRITY_DELAY_US);
+  digitalWrite(US_TRIG_PIN, HIGH);
+  delayMicroseconds(US_TRIGGER_TIME);
+  digitalWrite(US_TRIG_PIN, LOW);
+
+  pinMode(US_ECHO_PIN, INPUT);
+  unsigned long duration = pulseIn(US_ECHO_PIN, HIGH, 1000000UL);
+ 
+  return (duration/ROUND_TRIP_FACTOR) / PULSE_LENGTH_TO_CM_CONV_FACTOR;   
 }
 
